@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Narulal Flappy Bird - Perfect Hitboxes + Sounds</title>
+    <style>
+        body { 
+            margin: 0; display: flex; justify-content: center; align-items: center; 
+            height: 100vh; background-color: #111; overflow: hidden; user-select: none; font-family: sans-serif;
+        }
+        #game-container { position: relative; }
+        canvas { 
+            display: block; border: 4px solid #fff; border-radius: 8px; 
+            box-shadow: 0 10px 40px rgba(0,0,0,0.9); background-color: #4ec0ca; 
+        }
+        #score-board { 
+            position: absolute; top: 20px; width: 100%; text-align: center; 
+            color: white; font-size: 80px; font-weight: 900; 
+            text-shadow: 4px 4px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000; 
+            pointer-events: none; z-index: 10; 
+        }
+        #game-over { 
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+            text-align: center; background: rgba(0,0,0,0.9); padding: 40px; 
+            border-radius: 20px; color: white; display: none; z-index: 20; border: 3px solid #f1c40f; 
+        }
+        button { 
+            padding: 15px 35px; font-size: 24px; cursor: pointer; background: #f1c40f; 
+            border: none; font-weight: bold; border-radius: 50px; text-transform: uppercase;
+        }
+        button:hover { background: #f39c12; transform: scale(1.05); }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <canvas id="gameCanvas" width="420" height="650"></canvas>
+        <div id="score-board">0</div>
+        <div id="game-over">
+            <h1 style="margin-top:0; font-size: 45px;">WIPED OUT!</h1>
+            <button onclick="resetGame()">PLAY AGAIN</button>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // TUNING & SETTINGS (Adjust these if needed)
+        // ==========================================
+        const DEBUG_HITBOX = false;   // Change to true to see the invisible collision boxes
+        const PIPE_VISUAL_WIDTH = 140; // Makes the image draw wider to hide empty padding
+        const PIPE_HITBOX_WIDTH = 35;  // The actual deadly width (very thin, in the center)
+        const GAP_SIZE = 175;          // Space between top and bottom people
+        const BIRD_PADDING = 12;       // Shrinks Narulal's hitbox so his edges are safe
+
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+        const scoreElement = document.getElementById("score-board");
+        const gameOverScreen = document.getElementById("game-over");
+
+        // Bird and pipe images
+        const birdImg = new Image(); birdImg.src = "narulal.png";
+        const highImg = new Image(); highImg.src = "high.png"; 
+        const lowImg = new Image(); lowImg.src = "low.png";
+        const bgImg = new Image(); bgImg.src = "https://raw.githubusercontent.com/samuelcust/flappy-bird-assets/master/sprites/background-day.png";
+        const groundImg = new Image(); groundImg.src = "https://raw.githubusercontent.com/samuelcust/flappy-bird-assets/master/sprites/base.png";
+
+        // ======================
+        // SOUND EFFECTS (m4a files)
+        // ======================
+        const suryaAudio = new Audio('surya.m4a');
+        const hurrayAudio = new Audio('hurray.m4a');
+        suryaAudio.preload = 'auto';
+        hurrayAudio.preload = 'auto';
+
+        let frames = 0, score = 0, gameOver = false, groundX = 0;
+        const groundHeight = 110; 
+        const playableHeight = canvas.height - groundHeight; 
+
+        const bird = {
+            x: 60, y: 300, w: 50, h: 50,
+            gravity: 0.3, velocity: 0, jump: -6.5,
+            draw() {
+                ctx.save();
+                ctx.translate(this.x + this.w / 2, this.y + this.h / 2);
+                let angle = Math.min(Math.PI / 4, Math.max(-Math.PI / 4, (this.velocity * 0.1)));
+                ctx.rotate(angle);
+                if (birdImg.complete) ctx.drawImage(birdImg, -this.w / 2, -this.h / 2, this.w, this.h);
+                ctx.restore();
+
+                // Draw Bird Hitbox (if Debug is ON)
+                if (DEBUG_HITBOX) {
+                    ctx.strokeStyle = "yellow"; ctx.lineWidth = 2;
+                    ctx.strokeRect(this.x + BIRD_PADDING, this.y + BIRD_PADDING, this.w - (BIRD_PADDING*2), this.h - (BIRD_PADDING*2));
+                }
+            },
+            update() {
+                this.velocity += this.gravity;
+                this.y += this.velocity;
+                // Ground collision with death sound
+                if (!gameOver && this.y + this.h >= playableHeight) {
+                    this.y = playableHeight - this.h;
+                    gameOver = true;
+                    // Play hurray only once at death
+                    hurrayAudio.play().catch(e => console.log('Hurray sound failed:', e));
+                }
+                if (this.y <= 0) { this.y = 0; this.velocity = 0; }
+            }
+        };
+
+        const pipes = [];
+
+        function drawPipes() {
+            if (frames % 100 === 0) {
+                let pipeY = Math.floor(Math.random() * (playableHeight - GAP_SIZE - 120)) + 60;
+                pipes.push({ x: canvas.width, y: pipeY, passed: false });
+            }
+
+            for (let i = 0; i < pipes.length; i++) {
+                let p = pipes[i];
+                p.x -= 3; 
+
+                // Calculate Hitbox X-Center
+                let hitLeft = p.x + (PIPE_VISUAL_WIDTH - PIPE_HITBOX_WIDTH) / 2;
+
+                // --- TOP PIPE (Upside Down) ---
+                if (highImg.complete) {
+                    ctx.save();
+                    // Anchor to the center of the gap
+                    ctx.translate(p.x + PIPE_VISUAL_WIDTH/2, p.y);
+                    ctx.scale(1, -1); // Flip
+                    let aspectH = highImg.height * (PIPE_VISUAL_WIDTH / highImg.width);
+                    // Shift slightly so the head perfectly crosses the gap line
+                    ctx.drawImage(highImg, -PIPE_VISUAL_WIDTH/2, -15, PIPE_VISUAL_WIDTH, aspectH);
+                    ctx.restore();
+                }
+
+                // --- BOTTOM PIPE (Normal) ---
+                if (lowImg.complete) {
+                    let aspectH = lowImg.height * (PIPE_VISUAL_WIDTH / lowImg.width);
+                    ctx.drawImage(lowImg, p.x, p.y + GAP_SIZE - 10, PIPE_VISUAL_WIDTH, aspectH);
+                }
+
+                // --- COLLISION LOGIC (Using strict inner padding) ---
+                let bLeft = bird.x + BIRD_PADDING;
+                let bRight = bird.x + bird.w - BIRD_PADDING;
+                let bTop = bird.y + BIRD_PADDING;
+                let bBottom = bird.y + bird.h - BIRD_PADDING;
+
+                // Check Horizontal Hitbox
+                if (bRight > hitLeft && bLeft < hitLeft + PIPE_HITBOX_WIDTH) {
+                    // Check Vertical Gap
+                    if (bTop < p.y || bBottom > p.y + GAP_SIZE) {
+                        // Pipe collision – set gameOver and play hurray if not already dead
+                        if (!gameOver) {
+                            gameOver = true;
+                            hurrayAudio.play().catch(e => console.log('Hurray sound failed:', e));
+                        }
+                    }
+                }
+
+                // Draw Pipe Hitboxes (if Debug is ON)
+                if (DEBUG_HITBOX) {
+                    ctx.fillStyle = "rgba(255, 0, 0, 0.4)";
+                    ctx.fillRect(hitLeft, 0, PIPE_HITBOX_WIDTH, p.y); // Top Hitbox
+                    ctx.fillRect(hitLeft, p.y + GAP_SIZE, PIPE_HITBOX_WIDTH, playableHeight - (p.y + GAP_SIZE)); // Bottom Hitbox
+                }
+
+                // --- SCORE LOGIC (no sound here) ---
+                if (!p.passed && hitLeft + PIPE_HITBOX_WIDTH < bLeft) {
+                    p.passed = true;
+                    score++;
+                    scoreElement.innerText = score;
+                    // ❌ No hurray here anymore
+                }
+
+                if (p.x + PIPE_VISUAL_WIDTH < -50) { pipes.shift(); i--; }
+            }
+        }
+
+        function drawEnvironment() {
+            if (bgImg.complete) ctx.drawImage(bgImg, 0, 0, canvas.width, playableHeight);
+            if (groundImg.complete) {
+                groundX = (groundX - 3) % (groundImg.width / 2);
+                ctx.drawImage(groundImg, groundX, playableHeight, canvas.width + groundImg.width, groundHeight);
+            }
+        }
+
+        function loop() {
+            if (gameOver) { gameOverScreen.style.display = "block"; return; }
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawEnvironment(); 
+            drawPipes();       
+            bird.update();     
+            bird.draw();       
+
+            frames++;
+            requestAnimationFrame(loop);
+        }
+
+        // Flap action: plays surya sound on every tap (clones the audio to allow overlap)
+        const flap = () => { 
+            if (!gameOver) {
+                bird.velocity = bird.jump;
+                // Clone the surya audio to allow rapid overlapping plays
+                const snd = suryaAudio.cloneNode();
+                snd.play().catch(e => console.log('Surya sound failed:', e));
+            }
+        };
+        window.addEventListener("mousedown", flap);
+        window.addEventListener("keydown", (e) => { if(e.code === "Space" || e.code === "ArrowUp") flap(); });
+
+        function resetGame() {
+            bird.y = 300; bird.velocity = 0;
+            pipes.length = 0; score = 0; scoreElement.innerText = "0";
+            gameOver = false; gameOverScreen.style.display = "none";
+            frames = 0; loop();
+        }
+
+        window.onload = loop;
+    </script>
+</body>
+</html>
